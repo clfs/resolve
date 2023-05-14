@@ -294,22 +294,6 @@ func DecodePacket(r io.ReadSeeker) (*Packet, error) {
 	return &p, nil
 }
 
-/*
-import socket
-
-TYPE_A = 1
-
-def lookup_domain(domain_name):
-    query = build_query(domain_name, TYPE_A)
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.sendto(query, ("8.8.8.8", 53))
-
-    # get the response
-    data, _ = sock.recvfrom(1024)
-    response = parse_dns_packet(data)
-    return ip_to_string(response.answers[0].data)
-*/
-
 func LookupDomain(name string) (netip.Addr, error) {
 	query, err := NewQuery(name, TypeA)
 	if err != nil {
