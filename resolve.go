@@ -86,28 +86,6 @@ func EncodeDNSName(s string) []byte {
 	return b
 }
 
-/*
-def decode_name(reader):
-    parts = []
-    while (length := reader.read(1)[0]) != 0:
-        if length & 0b1100_0000:
-            parts.append(decode_compressed_name(length, reader))
-            break
-        else:
-            parts.append(reader.read(length))
-    return b".".join(parts)
-
-
-def decode_compressed_name(length, reader):
-    pointer_bytes = bytes([length & 0b0011_1111]) + reader.read(1)
-    pointer = struct.unpack("!H", pointer_bytes)[0]
-    current_pos = reader.tell()
-    reader.seek(pointer)
-    result = decode_name(reader)
-    reader.seek(current_pos)
-    return result
-*/
-
 // DecodeName decodes a DNS name.
 func DecodeName(r io.ReadSeeker) ([]byte, error) {
 	var (
@@ -131,6 +109,7 @@ loop:
 				return nil, err
 			}
 			parts = append(parts, part)
+			break loop
 		default:
 			part := make([]byte, n)
 			if _, err := r.Read(part); err != nil {
@@ -157,14 +136,18 @@ func DecodeCompressedName(length int, r io.ReadSeeker) ([]byte, error) {
 		return nil, err
 	}
 
-	r.Seek(int64(pointer), io.SeekStart)
+	if _, err := r.Seek(int64(pointer), io.SeekStart); err != nil {
+		return nil, err
+	}
 
 	res, err := DecodeName(r)
 	if err != nil {
 		return nil, err
 	}
 
-	r.Seek(restoreOffset, io.SeekStart)
+	if _, err := r.Seek(restoreOffset, io.SeekStart); err != nil {
+		return nil, err
+	}
 
 	return res, nil
 }
@@ -220,6 +203,34 @@ type Record struct {
 	Name  []byte
 	Type  Type
 	Class Class
-	TTL   int
+	TTL   uint32
 	Data  []byte
+}
+
+func DecodeRecord(r io.ReadSeeker) (Record, error) {
+	var record Record
+
+	name, err := DecodeName(r)
+	if err != nil {
+		return record, err
+	}
+	record.Name = name
+
+	buf := make([]byte, 10)
+	if _, err := r.Read(buf); err != nil {
+		return record, err
+	}
+
+	record.Type = Type(binary.BigEndian.Uint16(buf[0:]))
+	record.Class = Class(binary.BigEndian.Uint16(buf[2:]))
+	record.TTL = binary.BigEndian.Uint32(buf[4:])
+
+	dataLen := binary.BigEndian.Uint16(buf[8:])
+	data := make([]byte, dataLen)
+	if _, err := r.Read(data); err != nil {
+		return record, err
+	}
+	record.Data = data
+
+	return record, nil
 }
