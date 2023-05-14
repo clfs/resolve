@@ -199,6 +199,7 @@ func NewQuery(domain string, t Type) ([]byte, error) {
 	return append(hb, qb...), nil
 }
 
+// Record represents a DNS record.
 type Record struct {
 	Name  []byte
 	Type  Type
@@ -207,6 +208,7 @@ type Record struct {
 	Data  []byte
 }
 
+// DecodeRecord decodes a DNS record.
 func DecodeRecord(r io.ReadSeeker) (Record, error) {
 	var record Record
 
@@ -233,4 +235,58 @@ func DecodeRecord(r io.ReadSeeker) (Record, error) {
 	record.Data = data
 
 	return record, nil
+}
+
+// Packet represents a DNS packet.
+type Packet struct {
+	Header      Header
+	Questions   []Question
+	Answers     []Record
+	Authorities []Record
+	Additionals []Record
+}
+
+// DecodePacket decodes a DNS packet.
+func DecodePacket(r io.ReadSeeker) (*Packet, error) {
+	var p Packet
+
+	header, err := DecodeHeader(r)
+	if err != nil {
+		return nil, err
+	}
+	p.Header = header
+
+	for i := 0; i < int(p.Header.NumQuestions); i++ {
+		q, err := DecodeQuestion(r)
+		if err != nil {
+			return nil, err
+		}
+		p.Questions = append(p.Questions, q)
+	}
+
+	for i := 0; i < int(p.Header.NumAnswers); i++ {
+		rec, err := DecodeRecord(r)
+		if err != nil {
+			return nil, err
+		}
+		p.Answers = append(p.Answers, rec)
+	}
+
+	for i := 0; i < int(p.Header.NumAuthorities); i++ {
+		rec, err := DecodeRecord(r)
+		if err != nil {
+			return nil, err
+		}
+		p.Authorities = append(p.Authorities, rec)
+	}
+
+	for i := 0; i < int(p.Header.NumAdditionals); i++ {
+		rec, err := DecodeRecord(r)
+		if err != nil {
+			return nil, err
+		}
+		p.Additionals = append(p.Additionals, rec)
+	}
+
+	return &p, nil
 }
