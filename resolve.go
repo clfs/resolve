@@ -4,8 +4,11 @@ package resolve
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"math/rand"
+	"net"
+	"net/netip"
 	"strings"
 )
 
@@ -289,4 +292,57 @@ func DecodePacket(r io.ReadSeeker) (*Packet, error) {
 	}
 
 	return &p, nil
+}
+
+/*
+import socket
+
+TYPE_A = 1
+
+def lookup_domain(domain_name):
+    query = build_query(domain_name, TYPE_A)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.sendto(query, ("8.8.8.8", 53))
+
+    # get the response
+    data, _ = sock.recvfrom(1024)
+    response = parse_dns_packet(data)
+    return ip_to_string(response.answers[0].data)
+*/
+
+func LookupDomain(name string) (netip.Addr, error) {
+	query, err := NewQuery(name, TypeA)
+	if err != nil {
+		return netip.Addr{}, err
+	}
+
+	conn, err := net.Dial("udp", "8.8.8.8:53")
+	if err != nil {
+		return netip.Addr{}, err
+	}
+
+	if _, err := conn.Write(query); err != nil {
+		return netip.Addr{}, err
+	}
+
+	buf := make([]byte, 1024)
+	if _, err := conn.Read(buf); err != nil {
+		return netip.Addr{}, err
+	}
+
+	response, err := DecodePacket(bytes.NewReader(buf))
+	if err != nil {
+		return netip.Addr{}, err
+	}
+
+	if len(response.Answers) == 0 {
+		return netip.Addr{}, fmt.Errorf("no answers")
+	}
+
+	ipData := response.Answers[0].Data
+	ip, ok := netip.AddrFromSlice(ipData)
+	if !ok {
+		return netip.Addr{}, fmt.Errorf("invalid ip: %x", ipData)
+	}
+	return ip, nil
 }

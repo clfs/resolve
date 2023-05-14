@@ -3,6 +3,7 @@ package resolve
 import (
 	"bytes"
 	"net"
+	"net/netip"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -101,6 +102,48 @@ func TestGoogleDNS(t *testing.T) {
 	}
 
 	// sudo tcpdump -ni any port 53
+}
+
+/*
+lookup_domain("example.com")
+'93.184.216.34'
+lookup_domain("recurse.com")
+'108.156.172.48'
+lookup_domain("metafilter.com")
+'54.203.56.158'
+*/
+
+func toAddr(t *testing.T, s string) netip.Addr {
+	t.Helper()
+	addr, err := netip.ParseAddr(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return addr
+}
+
+func TestLookupDomain(t *testing.T) {
+	t.Skip("makes network calls")
+
+	// No guarantee these are consistent.
+	cases := []struct {
+		in   string
+		want netip.Addr
+	}{
+		{"example.com", toAddr(t, "93.184.216.34")},
+		{"recurse.com", toAddr(t, "18.164.174.83")},
+		{"metafilter.com", toAddr(t, "54.203.56.158")},
+	}
+
+	for _, tc := range cases {
+		got, err := LookupDomain(tc.in)
+		if err != nil {
+			t.Errorf("%s: error: %v", tc.in, err)
+		}
+		if got != tc.want {
+			t.Errorf("%s: got %s, want %s", tc.in, got, tc.want)
+		}
+	}
 }
 
 func FuzzDecodeName(f *testing.F) {
