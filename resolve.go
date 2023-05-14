@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"log"
 	"math/rand"
 	"net"
 	"net/netip"
@@ -158,7 +159,10 @@ func DecodeCompressedName(length int, r io.ReadSeeker) ([]byte, error) {
 // A Type is a DNS record type.
 type Type uint16
 
-const TypeA Type = 1
+const (
+	TypeA  Type = 1
+	TypeNS Type = 2
+)
 
 // A Class is a DNS record class.
 type Class uint16
@@ -180,7 +184,6 @@ func NewQuery(domain string, t Type) ([]byte, error) {
 	h := Header{
 		ID:           ID(),
 		NumQuestions: 1,
-		Flags:        FlagRecursionDesired,
 	}
 
 	q := Question{
@@ -229,13 +232,22 @@ func DecodeRecord(r io.ReadSeeker) (Record, error) {
 	record.Type = Type(binary.BigEndian.Uint16(buf[0:]))
 	record.Class = Class(binary.BigEndian.Uint16(buf[2:]))
 	record.TTL = binary.BigEndian.Uint32(buf[4:])
-
 	dataLen := binary.BigEndian.Uint16(buf[8:])
-	data := make([]byte, dataLen)
-	if _, err := r.Read(data); err != nil {
-		return record, err
+
+	switch record.Type {
+	case TypeNS:
+		data, err := DecodeName(r)
+		if err != nil {
+			return record, err
+		}
+		record.Data = data
+	default:
+		data := make([]byte, dataLen)
+		if _, err := r.Read(data); err != nil {
+			return record, err
+		}
+		record.Data = data
 	}
-	record.Data = data
 
 	return record, nil
 }
@@ -247,6 +259,47 @@ type Packet struct {
 	Answers     []Record
 	Authorities []Record
 	Additionals []Record
+}
+
+// Answer returns the IP from the first A record in the Answer section.
+func (p Packet) Answer() (netip.Addr, error) {
+	for _, record := range p.Answers {
+		if record.Type == TypeA {
+			addr, ok := netip.AddrFromSlice(record.Data)
+			if !ok {
+				return netip.Addr{}, fmt.Errorf("invalid ip: %q", record.Data)
+			}
+			return addr, nil
+		}
+	}
+
+	return netip.Addr{}, fmt.Errorf("no answers")
+}
+
+// NameserverIP returns the IP from the first A record in the Additional section.
+func (p Packet) NameserverIP() (netip.Addr, error) {
+	for _, record := range p.Additionals {
+		if record.Type == TypeA {
+			addr, ok := netip.AddrFromSlice(record.Data)
+			if !ok {
+				return netip.Addr{}, fmt.Errorf("invalid ip: %q", record.Data)
+			}
+			return addr, nil
+		}
+	}
+
+	return netip.Addr{}, fmt.Errorf("no additionals")
+}
+
+// Nameserver returns the domain from the first NS record in the Authority section.
+func (p Packet) Nameserver() (string, error) {
+	for _, record := range p.Authorities {
+		if record.Type == TypeNS {
+			return string(record.Data), nil
+		}
+	}
+
+	return "", fmt.Errorf("no authorities")
 }
 
 // DecodePacket decodes a DNS packet.
@@ -329,4 +382,55 @@ func LookupDomain(name string) (netip.Addr, error) {
 		return netip.Addr{}, fmt.Errorf("invalid ip: %x", ipData)
 	}
 	return ip, nil
+}
+
+func SendQuery(address, domain string, t Type) (*Packet, error) {
+	query, err := NewQuery(domain, t)
+	if err != nil {
+		return nil, err
+	}
+
+	conn, err := net.Dial("udp", address+":53")
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err := conn.Write(query); err != nil {
+		return nil, err
+	}
+
+	buf := make([]byte, 1024)
+	if _, err := conn.Read(buf); err != nil {
+		return nil, err
+	}
+
+	return DecodePacket(bytes.NewReader(buf))
+}
+
+const RootNSIP = "198.41.0.4"
+
+func Resolve(domain string, t Type) (netip.Addr, error) {
+	nameserver := RootNSIP
+
+	for {
+		log.Printf("querying %s for %s", nameserver, domain)
+		response, err := SendQuery(nameserver, domain, t)
+		if err != nil {
+			return netip.Addr{}, nil
+		}
+
+		if ip, err := response.Answer(); err == nil {
+			return ip, nil // done!
+		} else if nsIP, err := response.NameserverIP(); err == nil {
+			nameserver = nsIP.String() // keep going...
+		} else if nsDomain, err := response.Nameserver(); err == nil {
+			nsIP, err := Resolve(nsDomain, TypeA) // branch off
+			if err != nil {
+				return netip.Addr{}, err
+			}
+			nameserver = nsIP.String()
+		} else {
+			return netip.Addr{}, fmt.Errorf("unable to resolve") // fail :(
+		}
+	}
 }
